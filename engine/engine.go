@@ -51,14 +51,17 @@ func (this *Engine) scrollCallback(win *glfw.Window, xoff, yoff float64) {
 }
 func (this *Engine) init() {
 	runtime.LockOSThread()
+
 	if err := glfw.Init(); err != nil {
 		panic(err)
 	}
+		last := glfw.GetTime()
 	glfw.WindowHint(glfw.Resizable, glfw.True)
 	glfw.WindowHint(glfw.ContextVersionMajor, 4)
 	glfw.WindowHint(glfw.ContextVersionMinor, 3)
-  	glfw.WindowHint(glfw.OpenGLProfile, glfw.OpenGLCoreProfile)
-	glfw.WindowHint(glfw.OpenGLForwardCompatible, glfw.False)
+	glfw.WindowHint(glfw.OpenGLProfile, glfw.OpenGLCoreProfile)
+	glfw.WindowHint(glfw.OpenGLForwardCompatible, glfw.True)
+	glfw.WindowHint(glfw.ContextCreationAPI, glfw.NativeContextAPI)
 
 	if window, err := glfw.CreateWindow(int(this.Width), int(this.Height), this.Title, nil, nil); err != nil {
 		panic(err)
@@ -92,6 +95,7 @@ func (this *Engine) init() {
 	this.input.Get()
 	
 	this.App.Init(this,&this.input)
+	fmt.Printf("\nEngine init took %v\n", last-glfw.GetTime())
 }
 func (this *Engine) GrabMouse(grab bool) {
 	if grab {

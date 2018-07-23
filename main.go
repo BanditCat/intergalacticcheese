@@ -63,7 +63,11 @@ const lineWidth = 8
 
 const forceScale = 0.0005
 const shipBrakes = 0.95
-const mouseScale = (1 / 5000.0) / forceScale
+const mouseScale = (1 / 10000.0) / forceScale
+const positionScale = 90.0
+const rotationScale = 1 / 30.0
+const velScale = 0.02
+const slerpAmount = 0.01
 
 type mainApp struct {
 	rotx, roty    float32
@@ -80,25 +84,98 @@ type mainApp struct {
 	calcchan      chan int
 }
 
+func project(a, b mgl32.Vec3) mgl32.Vec3 {
+	bn := b.Normalize()
+	return bn.Mul(a.Dot(bn))
+}
+func ortho(a, b mgl32.Vec3) mgl32.Vec3 {
+	return a.Sub(project(a, b))
+}
+
 type BHShip struct {
 	orientation, rotation mgl32.Quat
 	position, velocity    mgl32.Vec3
 	// Desired reference frame
-	dposition, dvelocity    mgl32.Vec3
-	dorientation, drotation mgl32.Quat
+	dposition, dvelocity mgl32.Vec3
+	dorientation         mgl32.Quat
 	// Control mode
-	mode                    int
+	mode int
 }
 
+func (this *BHShip) setMode(mode int) {
+	this.mode = mode
+	if mode > 0 {
+		this.dposition = this.position
+		this.dvelocity = this.velocity
+		this.dorientation = this.orientation
+	}
+}
 func (this *BHShip) tick() {
-	this.orientation = this.orientation.Mul(this.rotation)
+	this.rotation = this.rotation.Normalize()
+	this.orientation = this.orientation.Mul(this.rotation).Normalize()
 	this.position = this.position.Add(this.velocity)
 }
-func (this *BHShip) force(rot mgl32.Quat, accel mgl32.Vec3) {
-	this.rotation = this.rotation.Mul(rot)
-	this.velocity = this.velocity.Add(accel)
-}
+func (this *BHShip) control(angular, linear mgl32.Vec3) {
+	if linear.Len() > 1 {
+		linear = linear.Normalize()
+	}
+	rangular := angular
+	if angular.Len() > 1 {
+		angular = angular.Normalize()
+	}
 
+	forcevec := mgl32.Vec3{linear[0] * forceScale, linear[1] * forceScale, linear[2] * forceScale}
+	forcevec = this.orientation.Mat4().Mul4x1(forcevec.Vec4(1)).Vec3()
+
+	angular = angular.Mul(forceScale)
+	rot := mgl32.AnglesToQuat(angular[2], angular[1], angular[0], mgl32.ZXY)
+	angular = rangular.Mul(rotationScale)
+	prot := mgl32.AnglesToQuat(angular[2], angular[1], angular[0], mgl32.ZXY)
+
+	posd := this.dposition.Sub(this.position)
+	if this.mode == 0 {
+		this.rotation = this.rotation.Mul(rot)
+		this.velocity = this.velocity.Add(forcevec)
+	} else {
+		this.dorientation = this.dorientation.Mul(prot)
+		drot := this.orientation.Inverse().Mul(this.dorientation)
+		drot = drot.Mul(mgl32.QuatSlerp(mgl32.QuatIdent(), this.rotation.Inverse(), 15))
+		drotAngle := slerpAmount / (2*float32(math.Acos(float64(drot.W))))
+		if math.IsNaN( float64(drotAngle) ) {
+			drotAngle = 0.0
+		}
+		if drotAngle > slerpAmount {
+			drotAngle = slerpAmount
+		}
+		drot = mgl32.QuatSlerp( mgl32.QuatIdent(), drot, drotAngle )
+		
+		this.rotation = this.rotation.Mul( drot )
+		//this.orientation = this.orientation.Mul(drot)
+		if this.mode == 1 {
+			this.dvelocity = this.dvelocity.Add(forcevec)
+		} else {
+			posv := forcevec.Mul(positionScale)
+			this.dposition = this.dposition.Add(posv)
+			this.dvelocity = posd
+			if this.dvelocity.Len() != 0 {
+				this.dvelocity = this.dvelocity.Normalize()
+			}
+			if this.velocity.Len() != 0 && posd.Len() != 0 {
+				this.dvelocity = this.dvelocity.Sub(ortho(this.velocity.Normalize().Mul(4), posd))
+			}
+			if this.dvelocity.Len() != 0 {
+				this.dvelocity = (this.dvelocity.Normalize()).Mul(posd.Len() * velScale)
+			}
+		}
+		veld := this.dvelocity.Sub(this.velocity)
+		if veld.Len() != 0 {
+			veld = veld.Normalize()
+			veld = veld.Mul(forceScale)
+		}
+		this.velocity = this.velocity.Add(veld)
+	}
+	this.tick()
+}
 func (this *mainApp) updateStarsSub(start, end int, ch chan int) {
 	for i := start; i < end; i++ {
 		for j := 0; j < numStars; j++ {
@@ -229,20 +306,7 @@ func (this *mainApp) Tick(engine *engine.Engine, input *input.Input, delta float
 		if engine.GetKey(glfw.KeyLeftShift) {
 			accel[2] -= 1
 		}
-		if accel.Len() > 1 {
-			accel = accel.Normalize()
-		}
-		if accel.Len() > 1 {
-			aaccel = aaccel.Normalize()
-		}
-		forcevec := mgl32.Vec3{accel[0] * forceScale, accel[1] * forceScale, accel[2] * forceScale}
-		forcevec = this.ship.orientation.Mat4().Mul4x1(forcevec.Vec4(1)).Vec3()
-
-		rot := mgl32.QuatRotate(aaccel[1]*forceScale, mgl32.Vec3{1, 0, 0})
-		rot = rot.Mul(mgl32.QuatRotate(aaccel[0]*forceScale, mgl32.Vec3{0, 1, 0}))
-		rot = rot.Mul(mgl32.QuatRotate(aaccel[2]*forceScale, mgl32.Vec3{0, 0, 1}))
-		this.ship.force(rot, forcevec)
-		this.ship.tick()
+		this.ship.control(aaccel, accel)
 	}
 	engine.UseProgram("main")
 	gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
@@ -270,7 +334,6 @@ func (this *mainApp) Tick(engine *engine.Engine, input *input.Input, delta float
 					<-this.calcchan
 				}
 			} else {
-				fmt.Println("Make!")
 				this.calcchan = make(chan int)
 			}
 
@@ -287,8 +350,8 @@ func (this *mainApp) Tick(engine *engine.Engine, input *input.Input, delta float
 	if engine.GetKeyPressed(glfw.KeyR) || input.GamePads[0].AP {
 		this.starInit()
 	}
-	if engine.GetKey(glfw.KeyF) || input.GamePads[0].Y {
-		//this.ship.movement = mgl32.Ident4()
+	if engine.GetKeyPressed(glfw.KeyF) || input.GamePads[0].YP {
+		this.ship.setMode((this.ship.mode + 1) % 3)
 	}
 	if engine.GetKeyPressed(glfw.KeySpace) || input.GamePads[0].BP {
 		this.paused = !this.paused
@@ -314,7 +377,7 @@ func (this *mainApp) Quit(engine *engine.Engine) {
 func main() {
 	fmt.Println("start!")
 	var m mainApp
-	engine := engine.Engine{App: &m, Width: 1024*4.0/3.0, Height: 1024, Title: "Intergallactic Cheese!!!"}
+	engine := engine.Engine{App: &m, Width: 1024 * 4.0 / 3.0, Height: 1024, Title: "Intergallactic Cheese!!!"}
 
 	for engine.Tick() {
 		// lol time.Sleep(10000000)
