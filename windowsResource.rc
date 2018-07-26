@@ -1,0 +1,30 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) Jonathan(Jon) DuBois 2014. This file is part of LNZ.         //
+////////////////////////////////////////////////////////////////////////////////
+
+101 ICON "bcj.ico"
+
+1 VERSIONINFO
+FILEVERSION     0,0,0,1
+PRODUCTVERSION  0,0,0,1
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904E4"
+    BEGIN
+      VALUE "CompanyName", "Jon DuBois"
+      VALUE "FileDescription", "LNZ"
+      VALUE "FileVersion", "0.1a"
+      VALUE "InternalName", "cheese"
+      VALUE "LegalCopyright", "Copyright Jon DuBois."
+      VALUE "OriginalFilename", "foo.exe"
+      VALUE "ProductName", "cheese"
+      VALUE "ProductVersion", "0.1a"
+    END
+  END
+
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1252
+  END
+END
