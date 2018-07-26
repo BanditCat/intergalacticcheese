@@ -9,63 +9,113 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 	"math"
 	"math/rand"
+	"strconv"
 	"time"
 )
 
-var vertexShader = `
-#version 330
+func vertexShader(numSlices int) string {
+	return `
+#version 430
 uniform mat4 projection;
 uniform mat4 camera;
 uniform mat4 model;
 uniform float slices;
+uniform float inslice;
 uniform float curSlice;
+uniform vec3 ships[` + strconv.Itoa(numSlices) + `];
 in vec3 vert;
 in float mass;
 out float z;
 out float scale;
 out vec3 color;
+out float gscale;
 void main() {
-  float c = ( mass - 0.5 )/ 16.5;
-  color = clamp( vec3( 1.0 - c, 0.2, c /2 + 0.5 ), 0.0, 1.0 );
+  float c = ( mass - 0.5 )/ 128.5;
+  color = clamp( vec3( 1.0 - c, 0.83 - c, c /2 + 0.5 ), 0.0, 1.0 );
   if( mass != 0.0 ){
-    color *= c;
+    //color *= c;
   }else{
     color = vec3(0);
   }
-  scale = mod( gl_VertexID/2-1-curSlice, slices + 1) / (slices+1);
-  z = length( camera * model * vec4( vert, 1 ) );
-  gl_Position = projection * camera * model * vec4(vert, 1);
+  gscale = pow( mass, 1.0/3.0);
+  vec3 dif = (ships[int(curSlice)]-ships[int(mod((gl_VertexID-1)/2, slices))]);
+  vec3 cvert = vert - ships[int(curSlice)]+dif*0.3;
+  scale = mod( (gl_VertexID-1)/2-1-curSlice, slices) / slices;
+  if(int(mod(gl_VertexID/2-1-curSlice,slices)) == 0){
+    scale = 0;
+  } else {
+    scale -= inslice / slices;
+  }
+  z = length( camera * model * vec4( cvert, 1 ) );
+  gl_Position = projection * camera * model * vec4(cvert, 1);
 }
 `
+}
 
-var fragmentShader = `
-#version 330
+func geometryShader() string {
+	return `
+#version 430
+layout(lines) in;
+layout (triangle_strip, max_vertices=4) out;
+ 
+in float z[2];
+in float scale[2];
+in vec3 color[2];
+in float gscale[2];
+
+out float zf;
+out float scalef;
+out vec3 colorf;
+
+void main(){
+  vec3 dif = gl_in[0].gl_Position.xyz - gl_in[1].gl_Position.xyz;
+  vec3 add = cross(dif,vec3(0,0,-1));
+  add.z = 0;
+  add = normalize(add)*0.01;
+  for(int i = 0; i < gl_in.length(); i++){
+    gl_Position = gl_in[i].gl_Position + vec4(add,0)*gscale[i];
+    zf = z[i];
+    scalef = scale[i];
+    colorf = color[i];
+    EmitVertex();
+    gl_Position = gl_in[i].gl_Position - vec4(add,0)*gscale[i];
+    EmitVertex();
+  }
+  EndPrimitive();
+}
+`
+}
+
+func fragmentShader() string {
+	return `
+#version 430
 out vec4 outputColor;
 uniform float slices;
-in vec3 color;
-in float scale;
-in float z;
+in vec3 colorf;
+in float scalef;
+in float zf;
 void main() {
-  vec3 ocolor = color * vec3(90/(z*z)) * vec3(scale);
-  if( scale < ( 1.25 / slices ) )
+  vec3 ocolor = colorf * vec3(scalef);
+  if( scalef < ( 0.5 / slices ) )
     discard;
   else
     outputColor = vec4( ocolor, 1.0);
 }
 `
+}
 
 const numStars = 768
-const numSlices = 150
-const ticksPerSlice = 2
+const numSlices = 400
+const ticksPerSlice = 1
 const subs = 16
 
 const lineWidth = 8
 
-const forceScale = 0.0005
+const forceScale = 0.0015
 const shipBrakes = 0.95
 const mouseScale = (1 / 10000.0) / forceScale
 const positionScale = 90.0
-const rotationScale = 1 / 30.0
+const rotationScale = 1 / 60.0
 const velScale = 0.02
 const slerpAmount = 0.01
 
@@ -77,6 +127,7 @@ type mainApp struct {
 	starMasses    []float32
 	starArray     []float32
 	starMassArray []float32
+	shipArray     []float32
 	counter       int
 	paused        bool
 	ship          BHShip
@@ -140,16 +191,16 @@ func (this *BHShip) control(angular, linear mgl32.Vec3) {
 		this.dorientation = this.dorientation.Mul(prot)
 		drot := this.orientation.Inverse().Mul(this.dorientation)
 		drot = drot.Mul(mgl32.QuatSlerp(mgl32.QuatIdent(), this.rotation.Inverse(), 15))
-		drotAngle := slerpAmount / (2*float32(math.Acos(float64(drot.W))))
-		if math.IsNaN( float64(drotAngle) ) {
+		drotAngle := slerpAmount / (2 * float32(math.Acos(float64(drot.W))))
+		if math.IsNaN(float64(drotAngle)) {
 			drotAngle = 0.0
 		}
 		if drotAngle > slerpAmount {
 			drotAngle = slerpAmount
 		}
-		drot = mgl32.QuatSlerp( mgl32.QuatIdent(), drot, drotAngle )
-		
-		this.rotation = this.rotation.Mul( drot )
+		drot = mgl32.QuatSlerp(mgl32.QuatIdent(), drot, drotAngle)
+
+		this.rotation = this.rotation.Mul(drot)
 		//this.orientation = this.orientation.Mul(drot)
 		if this.mode == 1 {
 			this.dvelocity = this.dvelocity.Add(forcevec)
@@ -216,21 +267,23 @@ func (this *mainApp) genLines(engine *engine.Engine) {
 	}
 	for i := 0; i < numStars; i++ {
 		for j := 0; j < 3; j++ {
-			index1 := ((curSlice*6 + j + 3) % (numSlices * 6)) + (i * 6 * (numSlices + 1))
-			index2 := ((curSlice*6 + j + 6) % (numSlices * 6)) + (i * 6 * (numSlices + 1))
+			index1 := ((curSlice*6 + j + 3) % (numSlices * 6)) + (i * 6 * numSlices)
+			index2 := ((curSlice*6 + j + 6) % (numSlices * 6)) + (i * 6 * numSlices)
 			this.starArray[index1] = this.oldStars[i][j]
 			this.starArray[index2] = this.oldStars[i][j]
+
 		}
-		index1 := ((curSlice*2 + 1) % (numSlices * 2)) + (i * 2 * (numSlices + 1))
-		index2 := ((curSlice*2 + 2) % (numSlices * 2)) + (i * 2 * (numSlices + 1))
+		index1 := ((curSlice*2 + 1) % (numSlices * 2)) + (i * 2 * numSlices)
+		index2 := ((curSlice*2 + 2) % (numSlices * 2)) + (i * 2 * numSlices)
 		this.starMassArray[index1] = this.starMasses[i]
 		this.starMassArray[index2] = this.starMasses[i]
 	}
 	this.counter++
 }
 func (this *mainApp) starInit() {
-	this.starArray = make([]float32, numStars*6*(numSlices+1))
-	this.starMassArray = make([]float32, numStars*2*(numSlices+1))
+	this.starArray = make([]float32, numStars*6*numSlices)
+	this.shipArray = make([]float32, numSlices*3)
+	this.starMassArray = make([]float32, numStars*2*numSlices)
 	this.starMasses = make([]float32, numStars)
 	this.stars = make([]mgl32.Vec3, numStars)
 	this.velocities = make([]mgl32.Vec3, numStars)
@@ -241,7 +294,7 @@ func (this *mainApp) starInit() {
 
 		this.stars[i] = (mgl32.Rotate3DY(angle)).Mul3x1(this.stars[i])
 		this.velocities[i] = mgl32.Rotate3DY(angle).Mul3x1(this.velocities[i])
-		this.starMasses[i] = float32(math.Pow(2, rand.Float64()*4))
+		this.starMasses[i] = float32(math.Pow(2, rand.Float64()*7))
 	}
 	this.oldStars = this.stars
 }
@@ -259,7 +312,7 @@ func (this *mainApp) Init(engine *engine.Engine, input *input.Input) {
 
 	last := glfw.GetTime()
 
-	engine.MakeProgramOrPanic("main", vertexShader, fragmentShader)
+	engine.MakeProgramOrPanic("main", vertexShader(numSlices), geometryShader(), fragmentShader())
 	engine.UseProgram("main")
 	mod := mgl32.Ident4()
 	engine.UniformMatrix("main", "model", mod)
@@ -307,6 +360,10 @@ func (this *mainApp) Tick(engine *engine.Engine, input *input.Input, delta float
 			accel[2] -= 1
 		}
 		this.ship.control(aaccel, accel)
+		for i := 0; i < 3; i++ {
+			this.shipArray[((this.counter/ticksPerSlice)%numSlices)*3+i] = this.ship.position[i]
+		}
+
 	}
 	engine.UseProgram("main")
 	gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
@@ -314,17 +371,6 @@ func (this *mainApp) Tick(engine *engine.Engine, input *input.Input, delta float
 	//this.roty += input.GamePads[0].LeftStick.Y() * 5 * delta
 	//this.rotx += input.Mouse.Delta[0]/500 + input.Mouse.Scroll[0]/10
 	//this.roty += input.Mouse.Delta[1]/500 + input.Mouse.Scroll[1]/10
-	modelX := mgl32.HomogRotate3D(float32(this.rotx), mgl32.Vec3{0, 1, 0})
-	modelY := mgl32.HomogRotate3D(float32(this.roty), mgl32.Vec3{0, 0, 1})
-	modelX = modelX.Mul4(modelY)
-	engine.UniformMatrix("main", "model", modelX)
-	proj := mgl32.Perspective(mgl32.DegToRad(45), engine.Height/engine.Width, 0.1, 100)
-	engine.UniformMatrix("main", "projection", proj)
-	camera := this.ship.orientation.Inverse().Mat4()
-	camera = camera.Mul4(mgl32.Translate3D(-this.ship.position[0], -this.ship.position[1], -this.ship.position[2]))
-
-	engine.UniformMatrix("main", "camera", camera)
-	gl.LineWidth(lineWidth)
 
 	quit := false
 	{
@@ -343,7 +389,18 @@ func (this *mainApp) Tick(engine *engine.Engine, input *input.Input, delta float
 		engine.SetBuffer("main", "vert", this.starArray, 3)
 		engine.SetBuffer("main", "mass", this.starMassArray, 1)
 	}
-	gl.DrawArrays(gl.LINES, 0, int32(numStars*2*(numSlices+1)))
+	engine.UniformVecs("main", "ships", this.shipArray)
+	engine.UniformFloat("main", "inslice", float32((this.counter-1)%ticksPerSlice)/float32(ticksPerSlice))
+	modelX := mgl32.HomogRotate3D(float32(this.rotx), mgl32.Vec3{0, 1, 0})
+	modelY := mgl32.HomogRotate3D(float32(this.roty), mgl32.Vec3{0, 0, 1})
+	modelX = modelX.Mul4(modelY)
+	engine.UniformMatrix("main", "model", modelX)
+	proj := mgl32.Perspective(mgl32.DegToRad(45), engine.Height/engine.Width, 0.1, 100)
+	engine.UniformMatrix("main", "projection", proj)
+	camera := this.ship.orientation.Inverse().Mat4()
+	engine.UniformMatrix("main", "camera", camera)
+	
+	gl.DrawArrays(gl.LINES, 0, int32(numStars*2*numSlices))
 	if input.Mouse.Left && !engine.IsMouseGrabbed() {
 		engine.GrabMouse(true)
 	}

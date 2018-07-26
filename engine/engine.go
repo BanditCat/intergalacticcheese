@@ -219,13 +219,23 @@ func (this *Engine) UniformFloat(program, uniform string, float float32) {
 	uni := this.getLoc(program, uniform)
 	gl.Uniform1f(int32(uni), float)
 }
+func (this *Engine) UniformVecs(program, uniform string, arr []float32){
+	uni := this.getLoc(program, uniform)
+	gl.Uniform3fv(int32(uni),int32(len(arr)/3),&arr[0])
+}
 
-func (this *Engine) MakeProgramOrPanic(name, vertexShaderSource, fragmentShaderSource string) {
+func (this *Engine) MakeProgramOrPanic(name, vertexShaderSource, geometryShaderSource, fragmentShaderSource string) {
 	vertexShader, err := compileShader(vertexShaderSource, gl.VERTEX_SHADER)
 	if err != nil {
 		panic(err)
 	}
 	defer gl.DeleteShader(vertexShader)
+
+	geometryShader, err := compileShader(geometryShaderSource, gl.GEOMETRY_SHADER)
+	if err != nil {
+		panic(err)
+	}
+	defer gl.DeleteShader(geometryShader)
 
 	fragmentShader, err := compileShader(fragmentShaderSource, gl.FRAGMENT_SHADER)
 	if err != nil {
@@ -236,6 +246,7 @@ func (this *Engine) MakeProgramOrPanic(name, vertexShaderSource, fragmentShaderS
 	program := gl.CreateProgram()
 
 	gl.AttachShader(program, vertexShader)
+	gl.AttachShader(program, geometryShader)
 	gl.AttachShader(program, fragmentShader)
 	gl.LinkProgram(program)
 
